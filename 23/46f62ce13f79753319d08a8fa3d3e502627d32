@@ -1,0 +1,29 @@
+workflow-templates/claude-agent.properties.json
+  53792ed7bf212ac9 1
+README.md
+  53792ed7bf212ac9 1
+workflow-templates/claude-agent.yml
+  53792ed7bf212ac9 1-79
+CLAUDE.md
+  53792ed7bf212ac9 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "2346f62ce13f79753319d08a8fa3d3e502627d32",
+  "prompts": {
+    "53792ed7bf212ac9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5268126f-b931-44df-8db4-dd7c44d05cab",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jade Cheng",
+      "messages": [],
+      "total_additions": 82,
+      "total_deletions": 0,
+      "accepted_lines": 82,
+      "overriden_lines": 0
+    }
+  }
+}
