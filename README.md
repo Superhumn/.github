@@ -1,1 +1,1 @@
-Org-wide Claude Code agent. Auto-reviews PRs and auto-fixes issues for all superhumn repos. Add ANTHROPIC_API_KEY secret per repo then enable the workflow template from Actions tab.
+Org-wide Claude Code agent. Auto-reviews PRs and auto-fixes issues across all superhumn repos. The workflow at `.github/workflows/claude-agent.yml` is applied to every repo via an organization repository ruleset, so no per-repo enablement is needed. The `ANTHROPIC_API_KEY` org secret is already set with visibility: all repos.
