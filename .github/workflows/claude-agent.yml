@@ -30,14 +30,25 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        if: vars.CLAUDE_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Check PR size
         id: size
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           stats=$(gh pr view "$PR_NUMBER" --json additions,deletions)
@@ -54,8 +65,16 @@ jobs:
         if: steps.size.outputs.skip == 'false'
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
           prompt: |
-            Review this PR. If there are bugs, security issues, or code quality problems, fix them directly by pushing commits and post a comment explaining what you changed. If the code looks good, post a short approval comment.
+            Review this PR. If there are bugs, security issues, or code quality
+            problems, fix them. First try pushing fixup commits to the PR
+            branch; if the push is rejected (protected branch, required
+            reviews, signed commits, fork without write access), instead open
+            a new PR from a `claude/fixup-<pr-number>` branch targeting the
+            original PR branch and link it in a review comment. Always post a
+            short comment explaining what you changed or, if the code looks
+            good, a brief approval comment.
           claude_args: --model claude-sonnet-4-6
 
   fix-issue:
@@ -68,12 +87,27 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        if: vars.CLAUDE_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
           prompt: |
-            Read this issue. Create a branch, implement the fix or feature, run any available tests, then open a PR. Keep changes minimal.
+            Read this issue. Create a `claude/issue-<issue-number>` branch,
+            implement the fix or feature, run any available tests, then open a
+            PR linking the issue. Keep changes minimal.
           claude_args: --model claude-haiku-4-5
