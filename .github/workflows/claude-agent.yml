@@ -5,6 +5,8 @@ on:
     types: [opened]
   pull_request:
     types: [opened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted]
 
 concurrency:
   group: claude-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
@@ -13,9 +15,13 @@ concurrency:
 jobs:
   review-and-fix-pr:
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.user.type != 'Bot'
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.draft == false &&
+       github.event.pull_request.user.type != 'Bot') ||
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state == 'approved' &&
+       github.event.pull_request.draft == false &&
+       github.event.review.user.type != 'Bot')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -66,6 +72,17 @@ jobs:
             original PR branch and link it in a review comment. Always post a
             short comment explaining what you changed or, if the code looks
             good, a brief approval comment.
+
+            After the review, if the PR looks clean (no bugs, security issues,
+            or quality problems remaining), squash-merge it. Use
+            `gh pr merge <pr-number> --squash --auto --delete-branch` so the
+            merge waits for required status checks to pass. Skip the merge if:
+            the PR is from a fork without write access, the PR targets a
+            protected branch you cannot merge to, the PR is still a draft,
+            you pushed fixup commits that need to be verified by CI first
+            (in that case let the next workflow run handle the merge), or
+            you found any blocking issue. Never force-merge by bypassing
+            branch protection.
           claude_args: --model claude-sonnet-4-6
 
   fix-issue:
@@ -100,5 +117,11 @@ jobs:
           prompt: |
             Read this issue. Create a `claude/issue-<issue-number>` branch,
             implement the fix or feature, run any available tests, then open a
-            PR linking the issue. Keep changes minimal.
+            PR linking the issue. Keep changes minimal. After opening the PR,
+            enable auto-merge with
+            `gh pr merge <pr-number> --squash --auto --delete-branch` so the
+            PR squash-merges itself once required status checks pass. If
+            auto-merge cannot be enabled (e.g. auto-merge is disabled on the
+            repo), leave the PR open for human review and note it in a PR
+            comment.
           claude_args: --model claude-haiku-4-5

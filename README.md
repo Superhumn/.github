@@ -1,7 +1,22 @@
-Org-wide Claude Code agent. Auto-reviews PRs and auto-fixes issues across all
-superhumn repos. The workflow at `.github/workflows/claude-agent.yml` is
-applied to every repo via an organization repository ruleset, so no per-repo
-enablement is needed.
+Org-wide Claude Code agent. Auto-reviews PRs, auto-fixes issues, and
+auto-merges clean PRs across all superhumn repos. The workflow at
+`.github/workflows/claude-agent.yml` is applied to every repo via an
+organization repository ruleset, so no per-repo enablement is needed.
+
+## What it does
+
+- **On PR open / sync**: reviews the diff, pushes fixup commits for any
+  problems it finds, and squash-merges (via `gh pr merge --auto`) once the
+  review is clean and required checks pass.
+- **On PR approval by a human**: re-runs and squash-merges the PR if it's
+  clean and CI is green.
+- **On issue open**: implements the fix on a `claude/issue-<n>` branch,
+  opens a PR linking the issue, and enables auto-merge so the PR squash-
+  merges itself once required checks pass.
+
+Auto-merge always goes through GitHub's `--auto` flag, so branch protection
+and required status checks remain authoritative. Claude never bypasses
+branch protection.
 
 ## Activation checklist
 
