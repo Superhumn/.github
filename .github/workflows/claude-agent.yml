@@ -3,13 +3,19 @@ name: Claude Code Agent
 on:
   issues:
     types: [opened]
+  issue_comment:
+    types: [created]
   pull_request:
     types: [opened, synchronize, ready_for_review]
   pull_request_review:
     types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  check_suite:
+    types: [completed]
 
 concurrency:
-  group: claude-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: claude-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.check_suite.pull_requests[0].number || github.event.check_suite.id }}
   cancel-in-progress: true
 
 jobs:
@@ -125,3 +131,128 @@ jobs:
             repo), leave the PR open for human review and note it in a PR
             comment.
           claude_args: --model claude-haiku-4-5
+
+  respond-to-mention:
+    if: >-
+      (github.event_name == 'issue_comment' &&
+       github.event.comment.user.type != 'Bot' &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       github.event.comment.user.type != 'Bot' &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state == 'changes_requested' &&
+       github.event.review.user.type != 'Bot')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          prompt: |
+            A human reviewer left feedback on a PR or issue (either an
+            @claude mention in a comment, an inline review comment, or a
+            "changes requested" review). Read the feedback and the
+            surrounding context (the PR diff, the file the comment is
+            anchored to, the issue body, prior comments).
+
+            If the feedback asks for a code change and you can address it,
+            push a fixup commit to the PR branch and reply to the comment
+            explaining what you changed. If the request is ambiguous,
+            architectural, or out of scope, reply asking the reviewer to
+            clarify or explaining why you're not making the change. If it's
+            a question, answer it. Keep replies short.
+
+            Do not merge the PR from this job — let the next
+            `pull_request`/`pull_request_review` run re-evaluate after CI.
+          claude_args: --model claude-sonnet-4-6
+
+  fix-ci-failure:
+    if: >-
+      github.event_name == 'check_suite' &&
+      github.event.check_suite.conclusion == 'failure' &&
+      github.event.check_suite.pull_requests[0] != null &&
+      startsWith(github.event.check_suite.head_branch, 'claude/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+      checks: read
+      actions: read
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.check_suite.head_sha }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      - name: Check retry budget
+        id: budget
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_NUMBER: ${{ github.event.check_suite.pull_requests[0].number }}
+        run: |
+          labels=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
+          attempts=$(echo "$labels" | grep -c '^claude-ci-retry-' || true)
+          echo "Prior CI-fix attempts: $attempts"
+          if [ "$attempts" -ge 3 ]; then
+            echo "Retry budget exhausted; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            next=$((attempts + 1))
+            label="claude-ci-retry-$next"
+            gh label create "$label" --color ededed --description "Claude CI-fix attempt $next" 2>/dev/null || true
+            gh pr edit "$PR_NUMBER" --add-label "$label" || true
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.budget.outputs.skip == 'false'
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          prompt: |
+            A check suite failed on PR
+            #${{ github.event.check_suite.pull_requests[0].number }}
+            (branch `${{ github.event.check_suite.head_branch }}`, head
+            `${{ github.event.check_suite.head_sha }}`). Inspect the failing
+            check runs via `gh run list` / `gh run view --log-failed`, find
+            the root cause, fix it, and push a fixup commit to the branch.
+            If the failure is flaky or external (transient network, third-
+            party outage), just re-run the failing jobs with `gh run rerun
+            --failed` instead of pushing a code change. If the failure is
+            outside your scope (requires secrets you don't have, depends on
+            infra you can't reach, or needs architectural decisions), post
+            a short PR comment explaining the blocker and stop.
+
+            Do not merge or close the PR from this job.
+          claude_args: --model claude-sonnet-4-6

@@ -13,6 +13,12 @@ organization repository ruleset, so no per-repo enablement is needed.
 - **On issue open**: implements the fix on a `claude/issue-<n>` branch,
   opens a PR linking the issue, and enables auto-merge so the PR squash-
   merges itself once required checks pass.
+- **On @claude mention, inline review comment, or "changes requested"
+  review**: reads the feedback, pushes a fixup commit if it's actionable,
+  or replies asking for clarification.
+- **On CI failure on a `claude/*` branch**: inspects the failing check
+  runs, pushes a fix (or re-runs the failed jobs if it's flaky). Capped at
+  3 retries per PR via `claude-ci-retry-N` labels.
 
 Auto-merge always goes through GitHub's `--auto` flag, so branch protection
 and required status checks remain authoritative. Claude never bypasses
