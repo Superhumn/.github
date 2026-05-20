@@ -65,9 +65,12 @@ jobs:
     needs: preflight
     if: >-
       needs.preflight.outputs.should_run == 'true' &&
+      !startsWith(github.event.pull_request.head.ref, 'claude/') &&
       ((github.event_name == 'pull_request' &&
         github.event.pull_request.draft == false &&
-        github.event.pull_request.user.type != 'Bot') ||
+        (github.event.pull_request.user.type != 'Bot' ||
+         contains(fromJSON('["dependabot[bot]","renovate[bot]","mend[bot]"]'),
+                  github.event.pull_request.user.login))) ||
        (github.event_name == 'pull_request_review' &&
         github.event.review.state == 'approved' &&
         github.event.pull_request.draft == false &&
@@ -406,3 +409,144 @@ jobs:
             manually. Never force-push outside the PR's own `claude/*`
             branch.
           claude_args: --model claude-sonnet-4-6
+
+  auto-approve-claude-prs:
+    needs: preflight
+    if: >-
+      needs.preflight.outputs.should_run == 'true' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Approve PR as github-actions[bot]
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # GITHUB_TOKEN is github-actions[bot]; Claude's PRs are authored
+          # by the Claude App, so this is a different identity and the
+          # approval counts toward branch protection.
+          gh pr review "$PR_NUMBER" --approve \
+            --body "Auto-approved: PR authored by the Claude agent." || true
+
+  sweep-old-issues:
+    needs: preflight
+    if: >-
+      needs.preflight.outputs.should_run == 'true' &&
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      - name: Find candidate issues
+        id: pick
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          MAX: ${{ vars.CLAUDE_ISSUE_SWEEP_MAX || '3' }}
+        run: |
+          # Open issues that are unassigned, lack a `claude-no-fix` label,
+          # have no `claude/issue-<n>` branch yet, and were opened > 24h
+          # ago. Oldest first.
+          cutoff=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          existing_branches=$(gh api "repos/${{ github.repository }}/branches?per_page=100" \
+            --jq '.[].name' | grep -E '^claude/issue-[0-9]+$' || true)
+          mapfile -t skip_numbers < <(echo "$existing_branches" | sed -E 's@^claude/issue-([0-9]+)$@\1@')
+          skip_csv=$(IFS=,; echo "${skip_numbers[*]}")
+          picked=$(gh issue list --state open --limit 100 \
+            --json number,createdAt,assignees,labels \
+            --jq "[.[] | select(.createdAt < \"$cutoff\") | select(.assignees | length == 0) | select(.labels | map(.name) | index(\"claude-no-fix\") | not) | select((\"$skip_csv\" | split(\",\")) | index((.number | tostring)) | not)] | sort_by(.createdAt) | .[0:$MAX] | map(.number) | join(\",\")")
+          echo "Picked issues: $picked"
+          echo "issues=$picked" >> "$GITHUB_OUTPUT"
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.pick.outputs.issues != ''
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          prompt: |
+            ${{ env.REPO_GUIDANCE }}
+
+            These open issues were picked up by the daily sweep because
+            they're unassigned and untouched: ${{ steps.pick.outputs.issues }}.
+
+            For each issue: read the body, decide whether it's actionable
+            (a clear bug report, a small feature, a doc fix). If so, create
+            a `claude/issue-<number>` branch, implement the fix, run any
+            tests, open a PR linking the issue with
+            `gh pr merge <pr> --squash --auto --delete-branch` when
+            ${{ needs.preflight.outputs.use_auto_merge }} is "true". If the
+            issue is unclear, asks a question, requires architectural
+            decisions, or you can't confidently fix it, post a short
+            comment on the issue explaining why you're not auto-fixing and
+            add the `claude-no-fix` label so we don't pick it up again.
+          claude_args: --model claude-sonnet-4-6
+
+  janitor:
+    needs: preflight
+    if: >-
+      needs.preflight.outputs.should_run == 'true' &&
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Close stale claude/* PRs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          STALE_DAYS: ${{ vars.CLAUDE_PR_STALE_DAYS || '14' }}
+          EXHAUSTED_DAYS: ${{ vars.CLAUDE_PR_EXHAUSTED_DAYS || '3' }}
+        run: |
+          stale_cutoff=$(date -u -d "$STALE_DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
+          exhausted_cutoff=$(date -u -d "$EXHAUSTED_DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
+          # Truly stale: claude/* PR with no updates for STALE_DAYS days.
+          gh pr list --state open --limit 100 \
+            --json number,headRefName,updatedAt,labels \
+            --jq ".[] | select(.headRefName | startswith(\"claude/\")) | select(.updatedAt < \"$stale_cutoff\") | .number" \
+            | while read -r number; do
+                echo "Closing stale PR #$number"
+                gh pr close "$number" \
+                  --comment "Closing as stale (no activity in ${STALE_DAYS}+ days). Reopen if still relevant." \
+                  --delete-branch || true
+              done
+          # Exhausted CI retries: claude/* PR with claude-ci-retry-3 label
+          # and no progress for EXHAUSTED_DAYS days.
+          gh pr list --state open --limit 100 \
+            --json number,headRefName,updatedAt,labels \
+            --jq ".[] | select(.headRefName | startswith(\"claude/\")) | select(.labels | map(.name) | index(\"claude-ci-retry-3\")) | select(.updatedAt < \"$exhausted_cutoff\") | .number" \
+            | while read -r number; do
+                echo "Closing PR #$number (CI retries exhausted)"
+                gh pr close "$number" \
+                  --comment "Closing: CI failed 3 times and no progress in ${EXHAUSTED_DAYS}+ days. Reopen with manual fixes if still wanted." \
+                  --delete-branch || true
+              done

@@ -22,6 +22,21 @@ organization repository ruleset, so no per-repo enablement is needed.
 - **On push to default branch and daily at 06:00 UTC**: walks open
   `claude/*` PRs, calls `gh pr update-branch` on ones that are simply
   behind, and invokes Claude to rebase/resolve any with conflicts.
+- **On every PR Claude opens**: `github-actions[bot]` auto-approves it,
+  so the single-approval branch-protection rule is satisfied without a
+  human. (For repos that also require CODEOWNERS approval, add the
+  Claude App to the branch-protection "allowed to bypass" list.)
+- **On PRs from Dependabot, Renovate, or Mend**: reviewed and auto-
+  merged through the same path as human PRs.
+- **Daily issue sweep**: picks up to `CLAUDE_ISSUE_SWEEP_MAX` (default 3)
+  oldest unassigned issues without a `claude/issue-<n>` branch and
+  without the `claude-no-fix` label and tries to fix them. Issues Claude
+  can't confidently handle get a comment plus a `claude-no-fix` label so
+  they aren't re-picked.
+- **Daily janitor**: closes stale `claude/*` PRs — anything untouched
+  for `CLAUDE_PR_STALE_DAYS` days (default 14), or with the
+  `claude-ci-retry-3` label and no progress for
+  `CLAUDE_PR_EXHAUSTED_DAYS` days (default 3).
 
 Auto-merge always goes through GitHub's `--auto` flag, so branch protection
 and required status checks remain authoritative. Claude never bypasses
@@ -41,6 +56,13 @@ Org variables (all optional, all visibility: all repos):
   warning and downstream jobs skip.
 - `CLAUDE_PR_LOC_CAP` — max LOC changed before the PR review is skipped.
   Defaults to `5000`. Skipped PRs get a one-time comment explaining why.
+- `CLAUDE_ISSUE_SWEEP_MAX` — max number of stale issues the daily sweep
+  tries to fix per repo per run. Defaults to `3`.
+- `CLAUDE_PR_STALE_DAYS` — days of inactivity before the janitor closes
+  a `claude/*` PR. Defaults to `14`.
+- `CLAUDE_PR_EXHAUSTED_DAYS` — days of inactivity before the janitor
+  closes a `claude/*` PR whose CI has hit `claude-ci-retry-3`. Defaults
+  to `3`.
 
 ## Activation checklist
 
