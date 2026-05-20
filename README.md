@@ -19,10 +19,28 @@ organization repository ruleset, so no per-repo enablement is needed.
 - **On CI failure on a `claude/*` branch**: inspects the failing check
   runs, pushes a fix (or re-runs the failed jobs if it's flaky). Capped at
   3 retries per PR via `claude-ci-retry-N` labels.
+- **On push to default branch and daily at 06:00 UTC**: walks open
+  `claude/*` PRs, calls `gh pr update-branch` on ones that are simply
+  behind, and invokes Claude to rebase/resolve any with conflicts.
 
 Auto-merge always goes through GitHub's `--auto` flag, so branch protection
 and required status checks remain authoritative. Claude never bypasses
-branch protection.
+branch protection. Each repo runs through `CLAUDE.md` and `AGENTS.md` (if
+present) for repo-specific conventions before Claude makes changes.
+
+## Configuration
+
+Org variables (all optional, all visibility: all repos):
+
+- `CLAUDE_APP_ID` — numeric ID of the GitHub App used for Claude's pushes.
+  Without it the workflow falls back to `GITHUB_TOKEN` and disables
+  auto-merge (because GITHUB_TOKEN pushes can't trigger downstream CI, so
+  `--auto` would wait forever).
+- `CLAUDE_DAILY_RUN_CAP` — max Claude Agent workflow runs per repo per
+  UTC day. Defaults to `50`. When reached, the preflight job logs a
+  warning and downstream jobs skip.
+- `CLAUDE_PR_LOC_CAP` — max LOC changed before the PR review is skipped.
+  Defaults to `5000`. Skipped PRs get a one-time comment explaining why.
 
 ## Activation checklist
 
@@ -41,7 +59,7 @@ To turn this on org-wide, an org admin must:
    - Add an org secret `CLAUDE_APP_PRIVATE_KEY` (visibility: all repos) with
      the app's PEM private key.
    - The workflow auto-detects `CLAUDE_APP_ID`; if unset it falls back to
-     `GITHUB_TOKEN`.
+     `GITHUB_TOKEN` and disables auto-merge.
 3. **Org repository ruleset** that enforces this workflow as required across
    all repos:
    - Org Settings → Repository → Rulesets → New ruleset → Required workflows.
