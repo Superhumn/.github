@@ -199,7 +199,7 @@ jobs:
             protection mismatch), leave the PR open and note it in a PR
             comment. If "false", do not enable auto-merge; leave the PR for
             a human to merge.
-          claude_args: --model claude-haiku-4-5
+          claude_args: --model claude-sonnet-4-6
 
   respond-to-mention:
     needs: preflight
