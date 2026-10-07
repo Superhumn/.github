@@ -30,6 +30,13 @@ env:
 
 jobs:
   preflight:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'check_suite' ||
+      github.event_name == 'workflow_run' ||
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request' ||
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association)
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -45,8 +52,11 @@ jobs:
           APP_ID: ${{ vars.CLAUDE_APP_ID }}
         run: |
           today=$(date -u +%Y-%m-%d)
-          count=$(gh api "repos/${{ github.repository }}/actions/runs?per_page=100" \
-            --jq '[.workflow_runs[] | select(.name == "Claude Code Agent") | select(.created_at | startswith("'"$today"'"))] | length' 2>/dev/null || echo 0)
+          workflow_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.workflow_id')
+          count=$(gh api -X GET "repos/${{ github.repository }}/actions/workflows/$workflow_id/runs" \
+            -f created=">=$today" -f per_page=100 --paginate \
+            --jq '[.workflow_runs[] | select(.created_at | startswith("'"$today"'")) | select(.conclusion != "skipped")] | length' 2>/dev/null \
+            | awk '{s+=$1} END {print s+0}')
           echo "Today's Claude Agent runs: $count / $CAP"
           if [ "$count" -ge "$CAP" ]; then
             echo "::warning::Daily Claude Agent run cap ($CAP) reached for ${{ github.repository }}; skipping."
@@ -74,7 +84,8 @@ jobs:
        (github.event_name == 'pull_request_review' &&
         (github.event.review.state == 'approved' || github.event.review.state == 'changes_requested') &&
         github.event.pull_request.draft == false &&
-        github.event.review.user.type != 'Bot'))
+        github.event.review.user.type != 'Bot' &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -121,8 +132,6 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         if: steps.size.outputs.skip == 'false'
-        env:
-          USE_AUTO_MERGE: ${{ needs.preflight.outputs.use_auto_merge }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ steps.app-token.outputs.token || github.token }}
@@ -136,19 +145,9 @@ jobs:
             a new PR from a `claude/fixup-<pr-number>` branch targeting the
             original PR branch and link it in a review comment. Always post a
             short comment explaining what you changed or, if the code looks
-            good, a brief approval comment.
+            good, a brief comment saying so.
 
-            Auto-merge enabled for this run: ${{ needs.preflight.outputs.use_auto_merge }}.
-            If "true" and the PR looks clean (no bugs, security issues, or
-            quality problems remaining), squash-merge it with
-            `gh pr merge <pr-number> --squash --auto --delete-branch` so the
-            merge waits for required status checks. Skip the merge if: the PR
-            is from a fork without write access, targets a protected branch
-            you cannot merge to, is still a draft, you just pushed fixup
-            commits that need CI to re-verify, or you found a blocking issue.
-            If "false", do not call `gh pr merge --auto` (GITHUB_TOKEN pushes
-            cannot trigger downstream CI, so --auto would wait forever);
-            leave the PR for a human to merge.
+            Do not merge, approve, or enable auto-merge on any PR. A human reviews and merges it.
 
             Never force-merge or bypass branch protection.
           claude_args: --model claude-sonnet-4-6
@@ -158,7 +157,8 @@ jobs:
     if: >-
       needs.preflight.outputs.should_run == 'true' &&
       github.event_name == 'issues' &&
-      github.event.issue.user.type != 'Bot'
+      github.event.issue.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -191,14 +191,7 @@ jobs:
             implement the fix or feature, run any available tests, then open
             a PR linking the issue. Keep changes minimal.
 
-            Auto-merge enabled for this run: ${{ needs.preflight.outputs.use_auto_merge }}.
-            If "true", after opening the PR enable auto-merge with
-            `gh pr merge <pr-number> --squash --auto --delete-branch` so it
-            squash-merges itself once required status checks pass. If
-            auto-merge is rejected by the repo (feature disabled, branch
-            protection mismatch), leave the PR open and note it in a PR
-            comment. If "false", do not enable auto-merge; leave the PR for
-            a human to merge.
+            Do not merge, approve, or enable auto-merge on any PR. A human reviews and merges it.
           claude_args: --model claude-sonnet-4-6
 
   respond-to-mention:
@@ -207,13 +200,16 @@ jobs:
       needs.preflight.outputs.should_run == 'true' &&
       ((github.event_name == 'issue_comment' &&
         github.event.comment.user.type != 'Bot' &&
-        contains(github.event.comment.body, '@claude')) ||
+        contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
        (github.event_name == 'pull_request_review_comment' &&
         github.event.comment.user.type != 'Bot' &&
-        contains(github.event.comment.body, '@claude')) ||
+        contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
        (github.event_name == 'pull_request_review' &&
         github.event.review.state == 'changes_requested' &&
-        github.event.review.user.type != 'Bot'))
+        github.event.review.user.type != 'Bot' &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -255,8 +251,7 @@ jobs:
             clarify or explaining why you're not making the change. If it's
             a question, answer it. Keep replies short.
 
-            Do not merge the PR from this job — let the next
-            `pull_request`/`pull_request_review` run re-evaluate after CI.
+            Do not merge, approve, or enable auto-merge on any PR. A human reviews and merges it.
           claude_args: --model claude-sonnet-4-6
 
   fix-ci-failure:
@@ -410,29 +405,6 @@ jobs:
             branch.
           claude_args: --model claude-sonnet-4-6
 
-  auto-approve-claude-prs:
-    needs: preflight
-    if: >-
-      needs.preflight.outputs.should_run == 'true' &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
-      startsWith(github.event.pull_request.head.ref, 'claude/') &&
-      github.event.pull_request.user.type == 'Bot'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Approve PR as github-actions[bot]
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          # GITHUB_TOKEN is github-actions[bot]; Claude's PRs are authored
-          # by the Claude App, so this is a different identity and the
-          # approval counts toward branch protection.
-          gh pr review "$PR_NUMBER" --approve \
-            --body "Auto-approved: PR authored by the Claude agent." || true
-
   sweep-old-issues:
     needs: preflight
     if: >-
@@ -493,10 +465,9 @@ jobs:
             For each issue: read the body, decide whether it's actionable
             (a clear bug report, a small feature, a doc fix). If so, create
             a `claude/issue-<number>` branch, implement the fix, run any
-            tests, open a PR linking the issue with
-            `gh pr merge <pr> --squash --auto --delete-branch` when
-            ${{ needs.preflight.outputs.use_auto_merge }} is "true". If the
-            issue is unclear, asks a question, requires architectural
+            tests, and open a PR linking the issue. Do not merge, approve,
+            or enable auto-merge on any PR. A human reviews and merges it.
+            If the issue is unclear, asks a question, requires architectural
             decisions, or you can't confidently fix it, post a short
             comment on the issue explaining why you're not auto-fixing and
             add the `claude-no-fix` label so we don't pick it up again.
