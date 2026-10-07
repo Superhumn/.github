@@ -1,18 +1,16 @@
-Org-wide Claude Code agent. Auto-reviews PRs, auto-fixes issues, and
-auto-merges clean PRs across all superhumn repos. The workflow at
+Org-wide Claude Code agent. Auto-reviews PRs and auto-fixes issues
+across all superhumn repos. A human reviews and merges every PR. The workflow at
 `.github/workflows/claude-agent.yml` is applied to every repo via an
 organization repository ruleset, so no per-repo enablement is needed.
 
 ## What it does
 
-- **On PR open / sync**: reviews the diff, pushes fixup commits for any
-  problems it finds, and squash-merges (via `gh pr merge --auto`) once the
-  review is clean and required checks pass.
-- **On PR approval by a human**: re-runs and squash-merges the PR if it's
-  clean and CI is green.
-- **On issue open**: implements the fix on a `claude/issue-<n>` branch,
-  opens a PR linking the issue, and enables auto-merge so the PR squash-
-  merges itself once required checks pass.
+- **On PR open / sync**: reviews the diff and pushes fixup commits for
+  any problems it finds.
+- **On PR approval or "changes requested" by a human**: re-runs the
+  review.
+- **On issue open**: implements the fix on a `claude/issue-<n>` branch
+  and opens a PR linking the issue.
 - **On @claude mention, inline review comment, or "changes requested"
   review**: reads the feedback, pushes a fixup commit if it's actionable,
   or replies asking for clarification.
@@ -22,12 +20,8 @@ organization repository ruleset, so no per-repo enablement is needed.
 - **On push to default branch and daily at 06:00 UTC**: walks open
   `claude/*` PRs, calls `gh pr update-branch` on ones that are simply
   behind, and invokes Claude to rebase/resolve any with conflicts.
-- **On every PR Claude opens**: `github-actions[bot]` auto-approves it,
-  so the single-approval branch-protection rule is satisfied without a
-  human. (For repos that also require CODEOWNERS approval, add the
-  Claude App to the branch-protection "allowed to bypass" list.)
-- **On PRs from Dependabot, Renovate, or Mend**: reviewed and auto-
-  merged through the same path as human PRs.
+- **On PRs from Dependabot, Renovate, or Mend**: reviewed through the
+  same path as human PRs.
 - **Daily issue sweep**: picks up to `CLAUDE_ISSUE_SWEEP_MAX` (default 3)
   oldest unassigned issues without a `claude/issue-<n>` branch and
   without the `claude-no-fix` label and tries to fix them. Issues Claude
@@ -38,9 +32,9 @@ organization repository ruleset, so no per-repo enablement is needed.
   `claude-ci-retry-3` label and no progress for
   `CLAUDE_PR_EXHAUSTED_DAYS` days (default 3).
 
-Auto-merge always goes through GitHub's `--auto` flag, so branch protection
-and required status checks remain authoritative. Claude never bypasses
-branch protection. Each repo runs through `CLAUDE.md` and `AGENTS.md` (if
+Claude never merges, approves, or enables auto-merge on a PR. Only
+issues, comments, and reviews from owners, members, and collaborators
+trigger the agent. Each repo runs through `CLAUDE.md` and `AGENTS.md` (if
 present) for repo-specific conventions before Claude makes changes.
 
 ## Configuration
@@ -48,9 +42,8 @@ present) for repo-specific conventions before Claude makes changes.
 Org variables (all optional, all visibility: all repos):
 
 - `CLAUDE_APP_ID` — numeric ID of the GitHub App used for Claude's pushes.
-  Without it the workflow falls back to `GITHUB_TOKEN` and disables
-  auto-merge (because GITHUB_TOKEN pushes can't trigger downstream CI, so
-  `--auto` would wait forever).
+  Without it the workflow falls back to `GITHUB_TOKEN`, whose pushes
+  can't trigger downstream CI.
 - `CLAUDE_DAILY_RUN_CAP` — max Claude Agent workflow runs per repo per
   UTC day. Defaults to `50`. When reached, the preflight job logs a
   warning and downstream jobs skip.
@@ -81,7 +74,7 @@ To turn this on org-wide, an org admin must:
    - Add an org secret `CLAUDE_APP_PRIVATE_KEY` (visibility: all repos) with
      the app's PEM private key.
    - The workflow auto-detects `CLAUDE_APP_ID`; if unset it falls back to
-     `GITHUB_TOKEN` and disables auto-merge.
+     `GITHUB_TOKEN`.
 3. **Org repository ruleset** that enforces this workflow as required across
    all repos:
    - Org Settings → Repository → Rulesets → New ruleset → Required workflows.
