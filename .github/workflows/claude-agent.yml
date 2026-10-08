@@ -440,7 +440,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           MAX: ${{ vars.CLAUDE_ISSUE_SWEEP_MAX || '3' }}
         run: |
-          # Open issues that are unassigned, lack a `claude-no-fix` label,
+          # Open issues from trusted authors that are unassigned, lack a `claude-no-fix` label,
           # have no `claude/issue-<n>` branch yet, and were opened > 24h
           # ago. Oldest first.
           cutoff=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
@@ -448,9 +448,9 @@ jobs:
             --jq '.[].name' | grep -E '^claude/issue-[0-9]+$' || true)
           mapfile -t skip_numbers < <(echo "$existing_branches" | sed -E 's@^claude/issue-([0-9]+)$@\1@')
           skip_csv=$(IFS=,; echo "${skip_numbers[*]}")
-          picked=$(gh issue list --state open --limit 100 \
-            --json number,createdAt,assignees,labels \
-            --jq "[.[] | select(.createdAt < \"$cutoff\") | select(.assignees | length == 0) | select(.labels | map(.name) | index(\"claude-no-fix\") | not) | select((\"$skip_csv\" | split(\",\")) | index((.number | tostring)) | not)] | sort_by(.createdAt) | .[0:$MAX] | map(.number) | join(\",\")")
+          # Only issues opened by owners, members, or collaborators.
+          picked=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=100" \
+            --jq "[.[] | select(.pull_request == null) | select(.author_association == \"OWNER\" or .author_association == \"MEMBER\" or .author_association == \"COLLABORATOR\") | select(.created_at < \"$cutoff\") | select(.assignees | length == 0) | select(.labels | map(.name) | index(\"claude-no-fix\") | not) | select((.number | tostring) as \$n | (\"$skip_csv\" | split(\",\")) | index(\$n) | not)] | sort_by(.created_at) | .[0:$MAX] | map(.number) | join(\",\")")
           echo "Picked issues: $picked"
           echo "issues=$picked" >> "$GITHUB_OUTPUT"
 

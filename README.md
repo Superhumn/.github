@@ -23,7 +23,8 @@ organization repository ruleset, so no per-repo enablement is needed.
 - **On PRs from Dependabot, Renovate, or Mend**: reviewed through the
   same path as human PRs.
 - **Daily issue sweep**: picks up to `CLAUDE_ISSUE_SWEEP_MAX` (default 3)
-  oldest unassigned issues without a `claude/issue-<n>` branch and
+  oldest unassigned issues opened by owners, members, or collaborators,
+  without a `claude/issue-<n>` branch and
   without the `claude-no-fix` label and tries to fix them. Issues Claude
   can't confidently handle get a comment plus a `claude-no-fix` label so
   they aren't re-picked.
